@@ -1,0 +1,135 @@
+.spreadsheet-container {
+  flex: 1;
+  overflow: auto;
+  background: white;
+  position: relative;
+}
+
+.spreadsheet-table {
+  display: flex;
+  flex-direction: column;
+  border-collapse: collapse;
+  min-width: fit-content;
+}
+
+.spreadsheet-row {
+  display: flex;
+  min-height: 30px;
+}
+
+.spreadsheet-cell {
+  min-width: 120px;
+  height: 30px;
+  border: 1px solid #d0d0d0;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  box-sizing: border-box;
+  background: white;
+  color: #1a1a1a;
+  position: relative;
+  font-size: 14px;
+  user-select: none;
+}
+
+.spreadsheet-cell.header-cell {
+  background: #f5f5f5;
+  font-weight: 600;
+  color: #666;
+  justify-content: center;
+  position: sticky;
+  z-index: 10;
+}
+
+.spreadsheet-cell.header-cell.row-header {
+  left: 0;
+  width: 60px;
+  min-width: 60px;
+  border-right: 2px solid #ccc;
+}
+
+.spreadsheet-cell.header-cell.column-header {
+  top: 0;
+  border-bottom: 2px solid #ccc;
+}
+
+.spreadsheet-cell.data-cell {
+  cursor: cell;
+  background: white;
+  color: #1a1a1a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spreadsheet-cell.data-cell:hover {
+  background: #f8f9fa;
+}
+
+.spreadsheet-cell.data-cell.selected {
+  border: 2px solid #0066cc;
+  z-index: 5;
+  background: #e6f2ff;
+  color: #1a1a1a;
+}
+
+.spreadsheet-cell.data-cell.selected .cell-content {
+  color: #1a1a1a;
+}
+
+.spreadsheet-cell.data-cell.formula {
+  color: #0066cc;
+  font-style: italic;
+}
+
+.spreadsheet-cell.data-cell .cell-content {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1a1a1a;
+}
+
+.spreadsheet-cell.data-cell .cell-input {
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: none;
+  padding: 0;
+  margin: 0;
+  font-size: 14px;
+  font-family: inherit;
+  background: transparent;
+  color: #1a1a1a;
+}
+
+.spreadsheet-cell.error {
+  color: #cc0000;
+  font-weight: 500;
+}
+
+/* 固定表头 */
+.spreadsheet-row.header-row {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+/* 滚动条样式 */
+.spreadsheet-container::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.spreadsheet-container::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.spreadsheet-container::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 6px;
+}
+
+.spreadsheet-container::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
