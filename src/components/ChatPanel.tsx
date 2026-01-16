@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { MessageCircle, Send, Sparkles } from 'lucide-react'
 import { SpreadsheetData } from '../App'
+import { PendingChange } from '../types/diff'
 import { aiService } from '../services/aiService'
+import { contextService } from '../services/contextService'
 import './ChatPanel.css'
 
 interface Message {
@@ -16,14 +18,16 @@ interface ChatPanelProps {
   updateMultipleCells?: (updates: Array<{ row: number; col: number; value: string; formula?: string }>) => void
   getCellValue: (row: number, col: number) => string
   getAllData: () => SpreadsheetData
+  selectedRange?: { startRow: number; startCol: number; endRow: number; endCol: number } | null
+  addPendingChanges?: (changes: PendingChange[]) => void
 }
 
-function ChatPanel({ updateCell, updateMultipleCells, getCellValue, getAllData }: ChatPanelProps) {
+function ChatPanel({ updateCell, updateMultipleCells, getCellValue, getAllData, selectedRange, addPendingChanges }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
       role: 'assistant',
-      content: 'Hello! I\'m your AI assistant. I can help you with spreadsheet operations. Try asking me to:\n- "Create a job application template"\n- "Set A1 to 100"\n- "Calculate sum of A1:A10"\n- "Create a formula in B1 that multiplies A1 by 2"\n\nPress Cmd+K (or Ctrl+K) for quick actions!',
+      content: '👋 Hello! I\'m your AI assistant with Diff Preview!\n\n🎯 Quick Actions:\n• Cmd+K (Ctrl+K) - Toggle chat panel\n• Cmd+I (Ctrl+I) - Smart suggestions\n\n🔍 NEW: Diff Preview\nAI suggestions now show a preview before applying. Review and accept/reject each change!\n\n💡 Try:\n- "Create a budget template"\n- "Fill A1:A5 with numbers 1 to 5"\n- "Create formulas in B column"',
       timestamp: new Date(),
     },
   ])
@@ -41,7 +45,32 @@ function ChatPanel({ updateCell, updateMultipleCells, getCellValue, getAllData }
     scrollToBottom()
   }, [messages])
 
+  // 智能建议函数
+  const showContextSuggestions = useCallback(() => {
+    // 自动打开面板
+    setIsOpen(true)
+    
+    // 分析上下文
+    const spreadsheetData = getAllData()
+    const context = contextService.analyzeContext(selectedRange || null, spreadsheetData)
+    const contextPrompt = contextService.generateContextPrompt(context)
+    
+    // 添加系统消息显示智能建议
+    const suggestionMessage: Message = {
+      id: Date.now().toString(),
+      role: 'assistant',
+      content: contextPrompt,
+      timestamp: new Date(),
+    }
+    
+    setMessages(prev => [...prev, suggestionMessage])
+    
+    // 聚焦输入框
+    setTimeout(() => inputRef.current?.focus(), 100)
+  }, [selectedRange, getAllData])
+
   // Cmd+K / Ctrl+K 快捷键 - 切换打开/关闭
+  // Cmd+I / Ctrl+I 快捷键 - 智能建议
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -55,6 +84,11 @@ function ChatPanel({ updateCell, updateMultipleCells, getCellValue, getAllData }
           return newState
         })
       }
+      // Cmd+I / Ctrl+I - 显示智能建议
+      if ((e.metaKey || e.ctrlKey) && e.key === 'i') {
+        e.preventDefault()
+        showContextSuggestions()
+      }
       // Escape 键关闭
       if (e.key === 'Escape' && isOpen) {
         setIsOpen(false)
@@ -63,7 +97,7 @@ function ChatPanel({ updateCell, updateMultipleCells, getCellValue, getAllData }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen])
+  }, [isOpen, showContextSuggestions])
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || isLoading) return
@@ -92,31 +126,48 @@ function ChatPanel({ updateCell, updateMultipleCells, getCellValue, getAllData }
 
       setMessages(prev => [...prev, assistantMessage])
 
-      // 执行AI返回的操作
+      // 执行AI返回的操作 - 使用Diff Preview
       if (response.actions && response.actions.length > 0) {
-        // 如果有多条操作且有批量更新方法，使用批量更新
-        if (response.actions.length > 1 && updateMultipleCells) {
-          const updates = response.actions
+        // 如果有addPendingChanges，使用diff preview
+        if (addPendingChanges) {
+          const pendingChanges: PendingChange[] = response.actions
             .filter(action => action.type === 'updateCell')
             .map(action => ({
+              id: `${Date.now()}-${action.row}-${action.col}`,
               row: action.row,
               col: action.col,
-              value: action.value,
-              formula: action.formula,
+              oldValue: getCellValue(action.row, action.col),
+              newValue: action.value,
+              reason: response.message,
+              confidence: 0.9,
+              status: 'pending' as const
             }))
-          updateMultipleCells(updates)
+          
+          addPendingChanges(pendingChanges)
         } else {
-          // 单个更新
-          response.actions.forEach(action => {
-            if (action.type === 'updateCell') {
-              updateCell(
-                action.row,
-                action.col,
-                action.value,
-                action.formula
-              )
-            }
-          })
+          // 降级：直接应用更改（如果没有diff preview支持）
+          if (response.actions.length > 1 && updateMultipleCells) {
+            const updates = response.actions
+              .filter(action => action.type === 'updateCell')
+              .map(action => ({
+                row: action.row,
+                col: action.col,
+                value: action.value,
+                formula: action.formula,
+              }))
+            updateMultipleCells(updates)
+          } else {
+            response.actions.forEach(action => {
+              if (action.type === 'updateCell') {
+                updateCell(
+                  action.row,
+                  action.col,
+                  action.value,
+                  action.formula
+                )
+              }
+            })
+          }
         }
       }
     } catch (error) {
@@ -130,7 +181,7 @@ function ChatPanel({ updateCell, updateMultipleCells, getCellValue, getAllData }
     } finally {
       setIsLoading(false)
     }
-  }, [input, isLoading, getAllData, updateCell])
+  }, [input, isLoading, getAllData, updateCell, updateMultipleCells, addPendingChanges])
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {

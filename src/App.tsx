@@ -1,6 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
+import * as XLSX from 'xlsx'
 import ChatPanel from './components/ChatPanel'
 import Spreadsheet from './components/Spreadsheet'
+import DiffPreview from './components/DiffPreview'
+import { PendingChange } from './types/diff'
 import './App.css'
 
 export interface SpreadsheetData {
@@ -17,6 +20,9 @@ function App() {
   const [history, setHistory] = useState<HistoryState[]>([{ data: {}, timestamp: Date.now() }])
   const [historyIndex, setHistoryIndex] = useState(0)
   const isUpdatingRef = useRef(false)
+  const [selectedRange, setSelectedRange] = useState<{ startRow: number; startCol: number; endRow: number; endCol: number } | null>(null)
+  const [pendingChanges, setPendingChanges] = useState<PendingChange[]>([])
+  const [showDiffPreview, setShowDiffPreview] = useState(false)
 
   // 添加到历史记录
   const addToHistory = useCallback((newData: SpreadsheetData) => {
@@ -56,39 +62,120 @@ function App() {
     }
   }, [history, historyIndex])
 
-  // formula 参数保留用于将来扩展（如公式计算）
-  const updateCell = useCallback((row: number, col: number, value: string, formula?: string) => {
+  const updateCell = useCallback((row: number, col: number, value: string) => {
     const key = `${row}-${col}`
     setSpreadsheetData((prev: SpreadsheetData) => {
       const newData = {
         ...prev,
-        [key]: value
+        [key]: String(value)
       }
       addToHistory(newData)
       return newData
     })
   }, [addToHistory])
 
-  const updateMultipleCells = useCallback((updates: Array<{ row: number; col: number; value: string; formula?: string }>) => {
+  const updateMultipleCells = useCallback((updates: Array<{ row: number; col: number; value: string }>) => {
+    console.log('updateMultipleCells called with:', updates)
     setSpreadsheetData((prev: SpreadsheetData) => {
       const updated = { ...prev }
       updates.forEach(({ row, col, value }) => {
         const key = `${row}-${col}`
-        updated[key] = value
+        updated[key] = String(value)
+        console.log(`Updated ${key}: ${value}`)
       })
       addToHistory(updated)
+      console.log('New spreadsheet data:', updated)
       return updated
     })
   }, [addToHistory])
 
   const getCellValue = useCallback((row: number, col: number): string => {
     const key = `${row}-${col}`
-    return spreadsheetData[key] || ''
+    const value = spreadsheetData[key]
+    return value ? String(value) : ''
   }, [spreadsheetData])
 
   const getAllData = useCallback((): SpreadsheetData => {
     return spreadsheetData
   }, [spreadsheetData])
+
+  // 添加pending changes
+  const addPendingChanges = useCallback((changes: PendingChange[]) => {
+    setPendingChanges(changes)
+    setShowDiffPreview(true)
+  }, [])
+
+  // 接受单个变更
+  const acceptChange = useCallback((id: string) => {
+    setPendingChanges(prev => 
+      prev.map(change => 
+        change.id === id ? { ...change, status: 'accepted' as const } : change
+      )
+    )
+  }, [])
+
+  // 拒绝单个变更
+  const rejectChange = useCallback((id: string) => {
+    setPendingChanges(prev => 
+      prev.map(change => 
+        change.id === id ? { ...change, status: 'rejected' as const } : change
+      )
+    )
+  }, [])
+
+  // 接受所有变更
+  const acceptAllChanges = useCallback(() => {
+    try {
+      const updates = pendingChanges
+        .filter(c => c.status === 'pending')
+        .map(c => ({
+          row: c.row,
+          col: c.col,
+          value: c.newValue
+        }))
+      
+      console.log('Accepting changes:', updates)
+      
+      if (updates.length > 0) {
+        updateMultipleCells(updates)
+      }
+      
+      // 立即标记为accepted
+      setPendingChanges(prev => 
+        prev.map(c => c.status === 'pending' ? { ...c, status: 'accepted' as const } : c)
+      )
+      
+      // 等待动画完成后关闭
+      setTimeout(() => {
+        setShowDiffPreview(false)
+        // 稍后清空，避免在关闭动画期间清空
+        setTimeout(() => setPendingChanges([]), 100)
+      }, 600)
+    } catch (error) {
+      console.error('Error accepting changes:', error)
+      // 发生错误时也要关闭弹窗
+      setShowDiffPreview(false)
+      setPendingChanges([])
+    }
+  }, [pendingChanges, updateMultipleCells])
+
+  // 拒绝所有变更
+  const rejectAllChanges = useCallback(() => {
+    setPendingChanges(prev => 
+      prev.map(c => ({ ...c, status: 'rejected' as const }))
+    )
+    
+    setTimeout(() => {
+      setShowDiffPreview(false)
+      setPendingChanges([])
+    }, 500)
+  }, [])
+
+  // 关闭diff预览
+  const closeDiffPreview = useCallback(() => {
+    setShowDiffPreview(false)
+    setPendingChanges([])
+  }, [])
 
   // CSV 导出功能
   const exportToCSV = useCallback(() => {
@@ -185,6 +272,94 @@ function App() {
     return result
   }
 
+  // Excel 导出功能
+  const exportToExcel = useCallback(() => {
+    const maxRow = Math.max(...Object.keys(spreadsheetData).map(key => parseInt(key.split('-')[0])), 0)
+    const maxCol = Math.max(...Object.keys(spreadsheetData).map(key => parseInt(key.split('-')[1])), 0)
+
+    const ws: XLSX.WorkSheet = {}
+    const range = { s: { c: 0, r: 0 }, e: { c: maxCol, r: maxRow } }
+
+    for (let row = 0; row <= maxRow; row++) {
+      for (let col = 0; col <= maxCol; col++) {
+        const key = `${row}-${col}`
+        const value = spreadsheetData[key]
+        
+        if (value) {
+          const cellAddress = XLSX.utils.encode_cell({ r: row, c: col })
+          
+          if (value.startsWith('=')) {
+            // 保存公式
+            ws[cellAddress] = {
+              t: 'n',
+              f: value.substring(1),
+              v: 0
+            }
+          } else {
+            // 普通值
+            const numValue = parseFloat(value)
+            if (!isNaN(numValue)) {
+              ws[cellAddress] = { t: 'n', v: numValue }
+            } else {
+              ws[cellAddress] = { t: 's', v: value }
+            }
+          }
+        }
+      }
+    }
+
+    ws['!ref'] = XLSX.utils.encode_range(range)
+
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
+
+    XLSX.writeFile(wb, `spreadsheet_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }, [spreadsheetData])
+
+  // Excel 导入功能
+  const importFromExcel = useCallback((file: File) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer)
+        const workbook = XLSX.read(data, { type: 'array', cellFormula: true })
+        
+        const firstSheetName = workbook.SheetNames[0]
+        const worksheet = workbook.Sheets[firstSheetName]
+        
+        const newData: SpreadsheetData = {}
+        
+        const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1')
+        
+        for (let row = range.s.r; row <= range.e.r; row++) {
+          for (let col = range.s.c; col <= range.e.c; col++) {
+            const cellAddress = XLSX.utils.encode_cell({ r: row, c: col })
+            const cell = worksheet[cellAddress]
+            
+            if (cell) {
+              const key = `${row}-${col}`
+              
+              if (cell.f) {
+                // 保存公式（带=前缀）
+                newData[key] = `=${cell.f}`
+              } else if (cell.v !== undefined) {
+                // 保存值
+                newData[key] = String(cell.v)
+              }
+            }
+          }
+        }
+        
+        setSpreadsheetData(newData)
+        addToHistory(newData)
+      } catch (error) {
+        console.error('Error importing Excel file:', error)
+        alert('导入Excel文件失败，请确保文件格式正确')
+      }
+    }
+    reader.readAsArrayBuffer(file)
+  }, [addToHistory])
+
   // 快捷键支持
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -253,9 +428,29 @@ function App() {
           >
             📤 Export CSV
           </button>
+          <div className="toolbar-separator"></div>
+          <label className="toolbar-button import-button">
+            📊 Import Excel
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) importFromExcel(file)
+              }}
+              style={{ display: 'none' }}
+            />
+          </label>
+          <button 
+            onClick={exportToExcel}
+            title="Export Excel with formulas"
+            className="toolbar-button"
+          >
+            📈 Export Excel
+          </button>
         </div>
         <div className="shortcuts-hint">
-          Press <kbd>Cmd+K</kbd> or <kbd>Ctrl+K</kbd> to open AI assistant
+          Press <kbd>Cmd+K</kbd> to toggle AI assistant | <kbd>Cmd+I</kbd> for smart suggestions
         </div>
       </div>
       <div className="app-content">
@@ -264,13 +459,28 @@ function App() {
           updateMultipleCells={updateMultipleCells}
           getCellValue={getCellValue}
           getAllData={getAllData}
+          selectedRange={selectedRange}
+          addPendingChanges={addPendingChanges}
         />
         <Spreadsheet
           data={spreadsheetData}
           updateCell={updateCell}
           getCellValue={getCellValue}
+          onSelectionChange={setSelectedRange}
+          pendingChanges={pendingChanges}
         />
       </div>
+      
+      {showDiffPreview && (
+        <DiffPreview
+          changes={pendingChanges}
+          onAcceptAll={acceptAllChanges}
+          onRejectAll={rejectAllChanges}
+          onAcceptOne={acceptChange}
+          onRejectOne={rejectChange}
+          onClose={closeDiffPreview}
+        />
+      )}
     </div>
   )
 }

@@ -73,6 +73,16 @@
   color: #1a1a1a;
 }
 
+.spreadsheet-cell.data-cell.in-range {
+  background: #cce5ff;
+  border: 1px solid #66a3d2;
+}
+
+.spreadsheet-cell.data-cell.selected.in-range {
+  background: #b3d9ff;
+  border: 2px solid #0066cc;
+}
+
 .spreadsheet-cell.data-cell.selected .cell-content {
   color: #1a1a1a;
 }
@@ -132,4 +142,41 @@
 
 .spreadsheet-container::-webkit-scrollbar-thumb:hover {
   background: #555;
+}
+
+/* Pending changes styles */
+.spreadsheet-cell.data-cell.pending-pending {
+  background: #fff3cd;
+  border: 2px solid #ffc107;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.spreadsheet-cell.data-cell.pending-accepted {
+  background: #d4edda;
+  border: 2px solid #28a745;
+  animation: fadeOut 0.5s ease-out forwards;
+}
+
+.spreadsheet-cell.data-cell.pending-rejected {
+  background: #f8d7da;
+  border: 2px solid #dc3545;
+  animation: fadeOut 0.5s ease-out forwards;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(255, 193, 7, 0);
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.3;
+  }
 }

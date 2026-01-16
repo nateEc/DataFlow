@@ -1,11 +1,14 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { SpreadsheetData } from '../App'
+import { PendingChange } from '../types/diff'
 import './Spreadsheet.css'
 
 interface SpreadsheetProps {
   data: SpreadsheetData
-  updateCell: (row: number, col: number, value: string, formula?: string) => void
+  updateCell: (row: number, col: number, value: string) => void
   getCellValue: (row: number, col: number) => string
+  onSelectionChange?: (range: { startRow: number; startCol: number; endRow: number; endCol: number } | null) => void
+  pendingChanges?: PendingChange[]
 }
 
 interface CellPosition {
@@ -19,11 +22,13 @@ const COLUMN_LETTERS = Array.from({ length: COLUMN_COUNT }, (_, i) =>
   String.fromCharCode(65 + i)
 )
 
-function Spreadsheet({ data, updateCell, getCellValue }: SpreadsheetProps) {
+function Spreadsheet({ data, updateCell, getCellValue, onSelectionChange, pendingChanges = [] }: SpreadsheetProps) {
   const [editingCell, setEditingCell] = useState<CellPosition | null>(null)
   const [editValue, setEditValue] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const [selectedCell, setSelectedCell] = useState<CellPosition | null>(null)
+  const [selectionStart, setSelectionStart] = useState<CellPosition | null>(null)
+  const [selectionEnd, setSelectionEnd] = useState<CellPosition | null>(null)
 
   // 同步外部数据更新
   const cells = useMemo(() => {
@@ -35,6 +40,7 @@ function Spreadsheet({ data, updateCell, getCellValue }: SpreadsheetProps) {
       }
       result.push(rowData)
     }
+    console.log('Cells recalculated, data keys:', Object.keys(data).length)
     return result
   }, [data, getCellValue])
 
@@ -45,11 +51,34 @@ function Spreadsheet({ data, updateCell, getCellValue }: SpreadsheetProps) {
     }
   }, [editingCell])
 
-  const handleCellClick = (row: number, col: number) => {
+  const handleCellClick = (row: number, col: number, event?: React.MouseEvent) => {
     setSelectedCell({ row, col })
+    
+    // 按住 Shift 键进行范围选择
+    if (event?.shiftKey && selectionStart) {
+      setSelectionEnd({ row, col })
+      notifySelectionChange({ row: selectionStart.row, col: selectionStart.col }, { row, col })
+    } else {
+      setSelectionStart({ row, col })
+      setSelectionEnd(null)
+      notifySelectionChange({ row, col }, { row, col })
+    }
+    
     const value = cells[row][col]
     setEditValue(value)
     setEditingCell({ row, col })
+  }
+
+  const notifySelectionChange = (start: CellPosition, end: CellPosition) => {
+    if (onSelectionChange) {
+      const range = {
+        startRow: Math.min(start.row, end.row),
+        startCol: Math.min(start.col, end.col),
+        endRow: Math.max(start.row, end.row),
+        endCol: Math.max(start.col, end.col),
+      }
+      onSelectionChange(range)
+    }
   }
 
   const handleCellDoubleClick = (row: number, col: number) => {
@@ -63,8 +92,7 @@ function Spreadsheet({ data, updateCell, getCellValue }: SpreadsheetProps) {
   const handleInputBlur = () => {
     if (editingCell) {
       const { row, col } = editingCell
-      const formula = editValue.trim().startsWith('=') ? editValue.trim() : undefined
-      updateCell(row, col, editValue.trim(), formula)
+      updateCell(row, col, editValue.trim())
       setEditingCell(null)
     }
   }
@@ -121,17 +149,22 @@ function Spreadsheet({ data, updateCell, getCellValue }: SpreadsheetProps) {
   const getDisplayValue = (value: string, row: number, col: number): string => {
     if (!value) return ''
     
+    // 确保 value 是字符串类型
+    const stringValue = String(value)
+    
     // 如果是公式（以=开头），计算并显示结果
-    if (value.startsWith('=')) {
+    if (stringValue.startsWith('=')) {
       try {
-        const result = evaluateFormula(value, row, col, data)
+        const result = evaluateFormula(stringValue, row, col, data)
+        console.log(`Formula at ${row}-${col}: ${stringValue} = ${result}`)
         return result
-      } catch {
+      } catch (error) {
+        console.error(`Formula error at ${row}-${col}:`, error)
         return '#ERROR'
       }
     }
     
-    return value
+    return stringValue
   }
 
   return (
@@ -162,17 +195,36 @@ function Spreadsheet({ data, updateCell, getCellValue }: SpreadsheetProps) {
               const isEditing = editingCell?.row === rowIdx && editingCell?.col === colIdx
               const isSelected = selectedCell?.row === rowIdx && selectedCell?.col === colIdx
               const displayValue = isEditing ? editValue : getDisplayValue(value, rowIdx, colIdx)
-              const isFormula = value.startsWith('=')
+              const isFormula = value && String(value).startsWith('=')
+
+              const inRange = selectionStart && selectionEnd && 
+                rowIdx >= Math.min(selectionStart.row, selectionEnd.row) &&
+                rowIdx <= Math.max(selectionStart.row, selectionEnd.row) &&
+                colIdx >= Math.min(selectionStart.col, selectionEnd.col) &&
+                colIdx <= Math.max(selectionStart.col, selectionEnd.col)
+
+              // Check for pending changes
+              const pendingChange = pendingChanges.find(
+                c => c.row === rowIdx && c.col === colIdx
+              )
+              const hasPendingChange = !!pendingChange
+              const pendingStatus = pendingChange?.status
 
               return (
                 <div
                   key={cellKey}
                   className={`spreadsheet-cell data-cell ${
                     isSelected ? 'selected' : ''
-                  } ${isFormula ? 'formula' : ''}`}
-                  onClick={() => handleCellClick(rowIdx, colIdx)}
+                  } ${inRange ? 'in-range' : ''} ${isFormula ? 'formula' : ''} ${
+                    hasPendingChange ? `pending-${pendingStatus}` : ''
+                  }`}
+                  onClick={(e) => handleCellClick(rowIdx, colIdx, e)}
                   onDoubleClick={() => handleCellDoubleClick(rowIdx, colIdx)}
-                  title={isFormula ? `Formula: ${value}` : ''}
+                  title={
+                    hasPendingChange 
+                      ? `Pending: ${pendingChange.oldValue} → ${pendingChange.newValue}`
+                      : isFormula ? `Formula: ${value}` : ''
+                  }
                 >
                   {isEditing ? (
                     <input
